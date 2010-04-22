@@ -726,7 +726,7 @@ uint32 Unit::DealDamage(Unit *pVictim, uint32 damage, CleanDamage const* cleanDa
 			if (pVictim->GetTypeId() == TYPEID_PLAYER)
 			{
 				sWorld.SendPvPAnnounce(player, ((Player*)pVictim));
-				sLog.outError("%u Has Killed %u",player->GetName(),((Player*)pVictim)->GetName());
+				sLog.outError("%s Has Killed %s",player->GetName(),((Player*)pVictim)->GetName());
 			}
 
             WorldPacket data(SMSG_PARTYKILLLOG, (8+8)); //send event PARTY_KILL
