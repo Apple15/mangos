@@ -941,7 +941,7 @@ void Spell::DoAllEffectOnTarget(TargetInfo *target)
     // Do healing and triggers
     if (m_healing)
     {
-        bool crit = real_caster && real_caster->isSpellCrit(unitTarget, m_spellInfo, m_spellSchoolMask);
+        bool crit = real_caster && real_caster->IsSpellCrit(unitTarget, m_spellInfo, m_spellSchoolMask);
         uint32 addhealth = m_healing;
         if (crit)
         {
@@ -1036,6 +1036,14 @@ void Spell::DoSpellHitOnUnit(Unit *unit, const uint32 effectMask)
     {
         if (realCaster)
             realCaster->SendSpellMiss(unit, m_spellInfo->Id, SPELL_MISS_IMMUNE);
+        return;
+    }
+
+    // Recheck deflection (only for delayed spells)
+    if (m_spellInfo->speed && unit->HasAura(19263))
+    {
+        if (realCaster)
+            realCaster->SendSpellMiss(unit, m_spellInfo->Id, SPELL_MISS_DEFLECT);
         return;
     }
 
@@ -2606,6 +2614,13 @@ void Spell::cast(bool skipCheck)
             // Faerie Fire (Feral)
             if (m_spellInfo->Id == 16857 && m_caster->m_form != FORM_CAT)
                 AddTriggeredSpell(60089);
+            break;
+        }
+        case SPELLFAMILY_HUNTER:
+        {
+            // Deterrence
+            if (m_spellInfo->Id == 19263)
+                AddTriggeredSpell(67801);
             break;
         }
         case SPELLFAMILY_ROGUE:
