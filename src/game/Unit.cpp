@@ -1097,7 +1097,7 @@ void Unit::CastSpell(Unit* Victim, uint32 spellId, bool triggered, Item *castIte
     CastSpell(Victim, spellInfo, triggered, castItem, triggeredByAura, originalCaster);
 }
 
-void Unit::CastSpell(Unit* Victim,SpellEntry const *spellInfo, bool triggered, Item *castItem, Aura* triggeredByAura, ObjectGuid originalCaster)
+void Unit::CastSpell(Unit* Victim, SpellEntry const *spellInfo, bool triggered, Item *castItem, Aura* triggeredByAura, ObjectGuid originalCaster)
 {
     if(!spellInfo)
     {
@@ -1206,6 +1206,7 @@ uint32 Unit::SpellNonMeleeDamageLog(Unit *pVictim, uint32 spellID, uint32 damage
     SpellEntry const *spellInfo = sSpellStore.LookupEntry(spellID);
     SpellNonMeleeDamage damageInfo(this, pVictim, spellInfo->Id, spellInfo->SchoolMask);
     CalculateSpellDamage(&damageInfo, damage, spellInfo);
+    damageInfo.target->CalculateAbsorbResistBlock(this, &damageInfo, spellInfo);
     DealDamageMods(damageInfo.target,damageInfo.damage,&damageInfo.absorb);
     SendSpellNonMeleeDamageLog(&damageInfo);
     DealSpellDamage(&damageInfo, true);
@@ -1227,7 +1228,6 @@ void Unit::CalculateSpellDamage(SpellNonMeleeDamage *damageInfo, int32 damage, S
 
     // Check spell crit chance
     bool crit = IsSpellCrit(pVictim, spellInfo, damageSchoolMask, attackType);
-    bool blocked = false;
 
     // damage bonus (per damage class)
     switch (spellInfo->DmgClass)
@@ -1238,8 +1238,6 @@ void Unit::CalculateSpellDamage(SpellNonMeleeDamage *damageInfo, int32 damage, S
         {
             //Calculate damage bonus
             damage = MeleeDamageBonus(pVictim, damage, attackType, spellInfo, SPELL_DIRECT_DAMAGE);
-            // Get blocked status
-            blocked = pVictim->IsSpellBlocked(this, spellInfo, attackType);
 
             // if crit add critical bonus
             if (crit)
@@ -1290,19 +1288,6 @@ void Unit::CalculateSpellDamage(SpellNonMeleeDamage *damageInfo, int32 damage, S
             uint32 armor_affected_damage = CalcNotIgnoreDamageRedunction(damage,damageSchoolMask);
             damage = damage - armor_affected_damage + CalcArmorReducedDamage(pVictim, armor_affected_damage);
         }
-
-        // block (only for damage class ranged and -melee, also non-physical damage possible)
-        if (blocked)
-        {
-            damageInfo->blocked = pVictim->GetShieldBlockValue();
-            if (damage < (int32)damageInfo->blocked)
-                damageInfo->blocked = damage;
-            damage-=damageInfo->blocked;
-        }
-
-        uint32 absorb_affected_damage = CalcNotIgnoreAbsorbDamage(damage,damageSchoolMask,spellInfo);
-        pVictim->CalculateAbsorbAndResist(this, damageSchoolMask, SPELL_DIRECT_DAMAGE, absorb_affected_damage, &damageInfo->absorb, &damageInfo->resist, !(spellInfo->AttributesEx2 & SPELL_ATTR_EX2_CANT_REFLECTED));
-        damage-= damageInfo->absorb + damageInfo->resist;
     }
     else
         damage = 0;
@@ -1339,7 +1324,7 @@ void Unit::DealSpellDamage(SpellNonMeleeDamage *damageInfo, bool durabilityLoss)
     }
 
     // Call default DealDamage (send critical in hit info for threat calculation)
-    CleanDamage cleanDamage(damageInfo->cleanDamage, BASE_ATTACK, damageInfo->HitInfo & SPELL_HIT_TYPE_CRIT ? MELEE_HIT_CRIT : MELEE_HIT_NORMAL);
+    CleanDamage cleanDamage(0, BASE_ATTACK, damageInfo->HitInfo & SPELL_HIT_TYPE_CRIT ? MELEE_HIT_CRIT : MELEE_HIT_NORMAL);
     DealDamage(pVictim, damageInfo->damage, &cleanDamage, SPELL_DIRECT_DAMAGE, SpellSchoolMask(damageInfo->schoolMask), spellProto, durabilityLoss);
 }
 
@@ -2352,7 +2337,35 @@ void Unit::CalculateAbsorbAndResist(Unit *pCaster, SpellSchoolMask schoolMask, D
     *absorb = damage - RemainingDamage - *resist;
 }
 
-void Unit::CalcHealAbsorb(Unit *pVictim, const SpellEntry *spellProto, uint32 &HealAmount, uint32 &Absorbed)
+void Unit::CalculateAbsorbResistBlock(Unit *pCaster, SpellNonMeleeDamage *damageInfo, SpellEntry const* spellProto, WeaponAttackType attType)
+{
+    bool blocked = false;
+    // Get blocked status
+    switch (spellProto->DmgClass)
+    {
+        // Melee and Ranged Spells
+        case SPELL_DAMAGE_CLASS_RANGED:
+        case SPELL_DAMAGE_CLASS_MELEE:
+            blocked = IsSpellBlocked(pCaster, spellProto, attType);
+            break;
+        default:
+            break;
+    }
+    
+    if (blocked)
+    {
+        damageInfo->blocked = GetShieldBlockValue();
+        if (damageInfo->damage < (int32)damageInfo->blocked)
+            damageInfo->blocked = damageInfo->damage;
+        damageInfo->damage-=damageInfo->blocked;
+    }
+
+    uint32 absorb_affected_damage = pCaster->CalcNotIgnoreAbsorbDamage(damageInfo->damage,GetSpellSchoolMask(spellProto),spellProto);
+    CalculateAbsorbAndResist(pCaster, GetSpellSchoolMask(spellProto), SPELL_DIRECT_DAMAGE, absorb_affected_damage, &damageInfo->absorb, &damageInfo->resist, !(spellProto->AttributesEx2 & SPELL_ATTR_EX2_CANT_REFLECTED));
+    damageInfo->damage-= damageInfo->absorb + damageInfo->resist;
+}
+
+void Unit::CalculateHealAbsorb(Unit *pVictim, const SpellEntry *spellProto, uint32 &HealAmount, uint32 &Absorbed)
 {
     int32 finalAmount = int32(HealAmount);
     bool existExpired = false;
@@ -2573,7 +2586,7 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst (const Unit *pVictim, WeaponAttack
     // parry & block chances
 
     // check if attack comes from behind, nobody can parry or block if attacker is behind
-    if (!pVictim->HasInArc(M_PI_F,this))
+    if (!pVictim->HasInArc(M_PI_F,this) && !pVictim->HasAura(19263))
     {
         DEBUG_LOG ("RollMeleeOutcomeAgainst: attack came from behind.");
     }
@@ -8979,7 +8992,7 @@ int32 Unit::DealHeal(Unit *pVictim, uint32 addhealth, SpellEntry const *spellPro
 {
     // calculate heal absorb and reduce healing
     uint32 absorb = 0;
-    CalcHealAbsorb(pVictim, spellProto, addhealth, absorb);
+    CalculateHealAbsorb(pVictim, spellProto, addhealth, absorb);
 
     int32 gain = addhealth ? pVictim->ModifyHealth(int32(addhealth)) : 0;
 
@@ -12801,6 +12814,7 @@ void Unit::ProcDamageAndSpellFor( bool isVictim, Unit * pTarget, uint32 procFlag
                 sLog.outDebug("ProcDamageAndSpell: doing %u damage from spell id %u (triggered by %s aura of spell %u)", auraModifier->m_amount, spellInfo->Id, (isVictim?"a victim's":"an attacker's"), triggeredByAura->GetId());
                 SpellNonMeleeDamage damageInfo(this, pTarget, spellInfo->Id, spellInfo->SchoolMask);
                 CalculateSpellDamage(&damageInfo, auraModifier->m_amount, spellInfo);
+                damageInfo.target->CalculateAbsorbResistBlock(this, &damageInfo, spellInfo);
                 DealDamageMods(damageInfo.target,damageInfo.damage,&damageInfo.absorb);
                 SendSpellNonMeleeDamageLog(&damageInfo);
                 DealSpellDamage(&damageInfo, true);

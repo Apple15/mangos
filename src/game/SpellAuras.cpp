@@ -351,7 +351,7 @@ pAuraHandler AuraHandler[TOTAL_AURAS]=
     &Aura::HandleUnused,                                    //298 unused (3.2.2a)
     &Aura::HandleUnused,                                    //299 unused (3.2.2a)
     &Aura::HandleNULL,                                      //300 3 spells (share damage?)
-    &Aura::HandleNoImmediateEffect,                         //301 SPELL_AURA_SCHOOL_HEAL_ABSORB         implemented in Unit::CalcHealAbsorb
+    &Aura::HandleNoImmediateEffect,                         //301 SPELL_AURA_SCHOOL_HEAL_ABSORB         implemented in Unit::CalculateHealAbsorb
     &Aura::HandleUnused,                                    //302 unused (3.2.2a)
     &Aura::HandleNULL,                                      //303 17 spells
     &Aura::HandleNULL,                                      //304 2 spells (alcohol effect?)
@@ -5817,9 +5817,6 @@ void Aura::HandleModCombatSpeedPct(bool apply, bool /*Real*/)
 
 void Aura::HandleModAttackSpeed(bool apply, bool /*Real*/)
 {
-    if(!m_target->isAlive() )
-        return;
-
     m_target->ApplyAttackTimePercentMod(BASE_ATTACK,float(m_modifier.m_amount),apply);
 }
 
@@ -7565,7 +7562,7 @@ void Aura::PeriodicTick()
 
             // calculate heal absorb and reduce healing
             uint32 absorb = 0;
-            pCaster->CalcHealAbsorb(m_target, GetSpellProto(), pdamage, absorb);
+            pCaster->CalculateHealAbsorb(m_target, GetSpellProto(), pdamage, absorb);
 
             int32 gain = m_target->ModifyHealth(pdamage);
             SpellPeriodicAuraLogInfo pInfo(this, pdamage, (pdamage - uint32(gain)), absorb, 0, 0.0f, isCrit);
@@ -7781,6 +7778,8 @@ void Aura::PeriodicTick()
             // maybe has to be sent different to client, but not by SMSG_PERIODICAURALOG
             SpellNonMeleeDamage damageInfo(pCaster, m_target, spellProto->Id, spellProto->SchoolMask);
             pCaster->CalculateSpellDamage(&damageInfo, gain, spellProto);
+
+            damageInfo.target->CalculateAbsorbResistBlock(pCaster, &damageInfo, spellProto);
 
             pCaster->DealDamageMods(damageInfo.target, damageInfo.damage, &damageInfo.absorb);
 
