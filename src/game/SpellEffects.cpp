@@ -54,6 +54,9 @@
 #include "ScriptCalls.h"
 #include "SkillDiscovery.h"
 #include "Formulas.h"
+#include "GridNotifiers.h"
+#include "GridNotifiersImpl.h"
+#include "CellImpl.h"
 
 pEffect SpellEffects[TOTAL_SPELL_EFFECTS]=
 {
@@ -518,9 +521,7 @@ void Spell::EffectSchoolDMG(SpellEffectIndex effect_idx)
                     // found Immolate or Shadowflame
                     if (aura)
                     {
-                        // DoT not have applied spell bonuses in m_amount
-                        int32 damagetick = m_caster->SpellDamageBonusDone(unitTarget, aura->GetSpellProto(), aura->GetModifier()->m_amount, DOT);
-                        damagetick = unitTarget->SpellDamageBonusTaken(m_caster, aura->GetSpellProto(), damagetick, DOT);
+                        int32 damagetick = aura->GetModifier()->m_amount;
                         // Save value of further damage
                         m_currentBasePoints[1] = damagetick * 2 / 3;
                         damage += damagetick * 3;
@@ -1558,6 +1559,33 @@ void Spell::EffectDummy(SpellEffectIndex eff_idx)
                     m_caster->CastSpell(m_caster, 54586, true);
                     return;
                 }
+                case 53808:                                 // Pygmy Oil
+                {
+                    const SpellEntry *pSpellShrink = sSpellStore.LookupEntry(53805);
+                    const SpellEntry *pSpellTransf = sSpellStore.LookupEntry(53806);
+
+                    if (!pSpellTransf || !pSpellShrink)
+                        return;
+
+                    if (Aura* pAura = m_caster->GetAura(pSpellShrink->Id, EFFECT_INDEX_0))
+                    {
+                        uint8 stackNum = pAura->GetStackAmount();
+
+                        // chance to become pygmified (5, 10, 15 etc)
+                        if (roll_chance_i(stackNum*5))
+                        {
+                            m_caster->RemoveAurasDueToSpell(pSpellShrink->Id);
+                            m_caster->CastSpell(m_caster, pSpellTransf, true);
+                            return;
+                        }
+                    }
+
+                    if (m_caster->HasAura(pSpellTransf->Id, EFFECT_INDEX_0))
+                        return;
+
+                    m_caster->CastSpell(m_caster, pSpellShrink, true);
+                    return;
+                }
                 case 55004:                                 // Nitro Boosts
                 {
                     if (!m_CastItem)
@@ -1823,9 +1851,22 @@ void Spell::EffectDummy(SpellEffectIndex eff_idx)
             // Life Tap
             if (m_spellInfo->SpellFamilyFlags & UI64LIT(0x0000000000040000))
             {
-				// in 333 there still seems to be spirit dependence although it is stated that there is not
+                // In 303 exist spirit depend
                 uint32 spirit = uint32(m_caster->GetStat(STAT_SPIRIT));
-                damage+=spirit*15/10;
+                switch (m_spellInfo->Id)
+                {
+                    case  1454: damage+=spirit; break;
+                    case  1455: damage+=spirit*15/10; break;
+                    case  1456: damage+=spirit*2; break;
+                    case 11687: damage+=spirit*25/10; break;
+                    case 11688:
+                    case 11689:
+                    case 27222:
+                    case 57946: damage+=spirit*3; break;
+                    default:
+                        sLog.outError("Spell::EffectDummy: %u Life Tap need set spirit multipler", m_spellInfo->Id);
+                        return;
+                }
 //              Think its not need (also need remove Life Tap from SpellDamageBonus or add new value)
 //              damage = m_caster->SpellDamageBonus(m_caster, m_spellInfo,uint32(damage > 0 ? damage : 0), SPELL_DIRECT_DAMAGE);
                 if (unitTarget && (int32(unitTarget->GetHealth()) > damage))
@@ -1833,9 +1874,7 @@ void Spell::EffectDummy(SpellEffectIndex eff_idx)
                     // Shouldn't Appear in Combat Log
                     unitTarget->ModifyHealth(-damage);
 
-                    int32 spell_power = m_caster->SpellBaseDamageBonusDone(GetSpellSchoolMask(m_spellInfo)) +
-                                        unitTarget->SpellBaseDamageBonusTaken(GetSpellSchoolMask(m_spellInfo));
-                    int32 mana = damage + (spell_power * 5/10 * m_caster->CalculateLevelPenalty(m_spellInfo));
+                    int32 mana = damage;
                     // Improved Life Tap mod
                     Unit::AuraList const& auraDummy = m_caster->GetAurasByType(SPELL_AURA_DUMMY);
                     for(Unit::AuraList::const_iterator itr = auraDummy.begin(); itr != auraDummy.end(); ++itr)
@@ -5637,15 +5676,54 @@ void Spell::EffectScriptEffect(SpellEffectIndex eff_idx)
                                 if (pTarget->hasUnitState(UNIT_STAT_ROAMING | UNIT_STAT_ROAMING_MOVE))
                                     pTarget->GetMotionMaster()->MovementExpired();
 
+                                // trigger cast of quest complete script (see code for this spell below)
+                                pTarget->CastSpell(pTarget, 44462, true);
+
                                 pTarget->GetMotionMaster()->MovePoint(0, m_caster->GetPositionX(), m_caster->GetPositionY(), m_caster->GetPositionZ());
                             }
 
                             return;
                         }
 
-                        // or if we are first time used item
+                        // or if it is first time used item, cast summon and despawn the target
                         m_caster->CastSpell(pTarget, pSpell, true);
                         pTarget->ForcedDespawn();
+
+                        // TODO: here we should get pointer to the just summoned and make it move.
+                        // without, it will be one extra use of quest item
+                    }
+
+                    return;
+                }
+                case 44462:                                 // Cast Quest Complete on Master
+                {
+                    if (m_caster->GetTypeId() != TYPEID_UNIT)
+                        return;
+
+                    Creature* pQuestCow = NULL;
+
+                    float range = 20.0f;
+
+                    // search for a reef cow nearby
+                    MaNGOS::NearestCreatureEntryWithLiveStateInObjectRangeCheck u_check(*m_caster, 24797, true, range);
+                    MaNGOS::CreatureLastSearcher<MaNGOS::NearestCreatureEntryWithLiveStateInObjectRangeCheck> searcher(m_caster, pQuestCow, u_check);
+
+                    Cell::VisitGridObjects(m_caster, searcher, range);
+
+                    // no cows found, so return
+                    if (!pQuestCow)
+                        return;
+
+                    if (!((Creature*)m_caster)->isTemporarySummon())
+                        return;
+
+                    if (const SpellEntry *pSpell = sSpellStore.LookupEntry(m_spellInfo->CalculateSimpleValue(eff_idx)))
+                    {
+                        TemporarySummon* pSummon = (TemporarySummon*)m_caster;
+
+                        // all ok, so make summoner cast the quest complete
+                        if (Unit* pSummoner = pSummon->GetSummoner())
+                            pSummoner->CastSpell(pSummoner, pSpell, true);
                     }
 
                     return;
@@ -5763,6 +5841,22 @@ void Spell::EffectScriptEffect(SpellEffectIndex eff_idx)
 
                     // triggered spell is stored in m_spellInfo->EffectBasePoints[0]
                     unitTarget->CastSpell(unitTarget, damage, false);
+                    break;
+                }
+                case 52941:                                 // Song of Cleansing
+                {
+                    uint32 spellId = 0;
+
+                    switch(m_caster->GetAreaId())
+                    {
+                        case 4385: spellId = 52954; break;  // Bittertide Lake
+                        case 4290: spellId = 52958; break;  // River's Heart
+                        case 4388: spellId = 52959; break;  // Wintergrasp River
+                    }
+
+                    if (spellId)
+                        m_caster->CastSpell(m_caster, spellId, true);
+
                     break;
                 }
                 case 54729:                                 // Winged Steed of the Ebon Blade

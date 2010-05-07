@@ -334,7 +334,7 @@ pAuraHandler AuraHandler[TOTAL_AURAS]=
     &Aura::HandleNoImmediateEffect,                         //281 SPELL_AURA_MOD_HONOR_GAIN             implemented in Player::RewardHonor
     &Aura::HandleAuraIncreaseBaseHealthPercent,             //282 SPELL_AURA_INCREASE_BASE_HEALTH_PERCENT
     &Aura::HandleNoImmediateEffect,                         //283 SPELL_AURA_MOD_HEALING_RECEIVED       implemented in Unit::SpellHealingBonusTaken
-    &Aura::HandleNULL,                                      //284 51 spells
+    &Aura::HandleAuraLinked,                                //284 SPELL_AURA_LINKED
     &Aura::HandleAuraModAttackPowerOfArmor,                 //285 SPELL_AURA_MOD_ATTACK_POWER_OF_ARMOR  implemented in Player::UpdateAttackPowerAndDamage
     &Aura::HandleNoImmediateEffect,                         //286 SPELL_AURA_ABILITY_PERIODIC_CRIT      implemented in Aura::IsCritFromAbilityAura called from Aura::PeriodicTick
     &Aura::HandleNoImmediateEffect,                         //287 SPELL_AURA_DEFLECT_SPELLS             implemented in Unit::MagicSpellHitResult and Unit::MeleeSpellHitResult
@@ -961,7 +961,7 @@ void Aura::_AddAura()
     // Try find slot for aura
     uint8 slot = NULL_AURA_SLOT;
     // Lookup for some spell auras (and get slot from it)
-    for(uint8 i = 0; i < m_effIndex; ++i)
+    for(uint8 i = 0; i < MAX_EFFECT_INDEX; ++i)
     {
         Unit::spellEffectPair spair = Unit::spellEffectPair(GetId(), SpellEffectIndex(i));
         for(Unit::AuraMap::const_iterator itr = m_target->GetAuras().lower_bound(spair); itr != m_target->GetAuras().upper_bound(spair); ++itr)
@@ -1574,36 +1574,6 @@ void Aura::TriggerSpell()
             {
                 switch(auraId)
                 {
-                    // Firestone Passive (1-5 ranks)
-                    case 758:
-                    case 17945:
-                    case 17947:
-                    case 17949:
-                    case 27252:
-                    {
-                        if (target->GetTypeId() != TYPEID_PLAYER)
-                            return;
-                        Item* item = ((Player*)target)->GetWeaponForAttack(BASE_ATTACK);
-                        if (!item)
-                            return;
-                        uint32 enchant_id = 0;
-                        switch (GetId())
-                        {
-                             case   758: enchant_id = 1803; break;   // Rank 1
-                             case 17945: enchant_id = 1823; break;   // Rank 2
-                             case 17947: enchant_id = 1824; break;   // Rank 3
-                             case 17949: enchant_id = 1825; break;   // Rank 4
-                             case 27252: enchant_id = 2645; break;   // Rank 5
-                             default:
-                                 return;
-                        }
-                        // remove old enchanting before applying new
-                        ((Player*)target)->ApplyEnchantment(item,TEMP_ENCHANTMENT_SLOT,false);
-                        item->SetEnchantment(TEMP_ENCHANTMENT_SLOT, enchant_id, m_modifier.periodictime+1000, 0);
-                        // add new enchanting
-                        ((Player*)target)->ApplyEnchantment(item,TEMP_ENCHANTMENT_SLOT,true);
-                        return;
-                    }
 //                    // Periodic Mana Burn
 //                    case 812: break;
 //                    // Polymorphic Ray
@@ -2280,6 +2250,13 @@ void Aura::TriggerSpell()
             case 33525:
                 target->CastSpell(target, trigger_spell_id, true, NULL, this, casterGUID);
                 return;
+            // Rod of Purification - for quest 10839 (Veil Skith: Darkstone of Terokk)
+            case 38736:
+            {
+                if(Unit* caster = GetCaster())
+                    caster->CastSpell(target, trigger_spell_id, true, NULL, this);
+                return;
+            }
             // Intense Cold
             case 48094:
                 target->CastSpell(target, trigger_spell_id, true, NULL, this);
@@ -2626,20 +2603,6 @@ void Aura::HandleAuraDummy(bool apply, bool Real)
             return;
         }
 
-        // Vampiric Touch
-        if ((GetSpellProto()->SpellFamilyFlags & UI64LIT(0x40000000000)) && m_removeMode==AURA_REMOVE_BY_DISPEL)
-        {
-            Unit* caster = GetCaster();
-            if (!caster)
-                return;
-
-            int32 basepoints = GetSpellProto()->EffectBasePoints[1] * 8;
-            basepoints = caster->SpellDamageBonusDone(m_target, GetSpellProto(), basepoints, DOT);
-            basepoints = m_target->SpellDamageBonusTaken(caster, GetSpellProto(), basepoints, DOT);
-            m_target->CastCustomSpell(m_target, 64085, &basepoints, NULL, NULL, false, NULL, this, GetCasterGUID());
-            return;
-        }
-
         if (m_removeMode == AURA_REMOVE_BY_DEATH)
         {
             // Stop caster Arcane Missle chanelling on death
@@ -2846,7 +2809,7 @@ void Aura::HandleAuraDummy(bool apply, bool Real)
                     int32 bp0 = m_modifier.m_amount;
 
                     if (Unit* caster = GetCaster())
-                        m_target->CastCustomSpell(caster,48210,&bp0,NULL,NULL,true);
+                        m_target->CastCustomSpell(caster,48210,&bp0,NULL,NULL,true,NULL,this,GetCasterGUID());
                 }
             }
             break;
@@ -8731,6 +8694,25 @@ void Aura::HandleAllowOnlyAbility(bool apply, bool Real)
     m_target->UpdateDamagePhysical(BASE_ATTACK);
     m_target->UpdateDamagePhysical(RANGED_ATTACK);
     m_target->UpdateDamagePhysical(OFF_ATTACK);
+}
+
+void Aura::HandleAuraLinked(bool apply, bool Real)
+{
+    if (!Real)
+        return;
+
+    uint32 linkedSpell = m_spellProto->EffectTriggerSpell[m_effIndex];
+    SpellEntry const *spellInfo = sSpellStore.LookupEntry(linkedSpell);
+    if (!spellInfo)
+    {
+        sLog.outError("HandleAuraLinked for spell %u effect %u: triggering unknown spell %u", m_spellProto->Id, m_effIndex, linkedSpell);
+        return;
+    }
+
+    if (apply)
+        m_target->CastSpell(m_target, linkedSpell, true, NULL, this);
+    else
+        m_target->RemoveAurasByCasterSpell(linkedSpell, GetCasterGUID());
 }
 
 void Aura::HandleAuraOpenStable(bool apply, bool Real)
