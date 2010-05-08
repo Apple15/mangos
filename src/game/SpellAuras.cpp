@@ -447,7 +447,7 @@ m_isRemovedOnShapeLost(true), m_in_use(0), m_deleted(false)
 
     m_duration = m_maxduration;
 
-    sLog.outDebug("Aura: construct Spellid : %u, Aura : %u Duration : %d Target : %d Damage : %d", m_spellProto->Id, m_spellProto->EffectApplyAuraName[eff], m_maxduration, m_spellProto->EffectImplicitTargetA[eff],damage);
+    DEBUG_LOG("Aura: construct Spellid : %u, Aura : %u Duration : %d Target : %d Damage : %d", m_spellProto->Id, m_spellProto->EffectApplyAuraName[eff], m_maxduration, m_spellProto->EffectImplicitTargetA[eff],damage);
 
     SetModifier(AuraType(m_spellProto->EffectApplyAuraName[eff]), damage, m_spellProto->EffectAmplitude[eff], m_spellProto->EffectMiscValue[eff]);
 
@@ -2483,6 +2483,19 @@ void Aura::HandleAuraDummy(bool apply, bool Real)
                 }
                 break;
             }
+            case SPELLFAMILY_DEATHKNIGHT:
+            {
+                // Hungering Cold - disease apply
+                if(GetId() == 51209)
+                {
+                    Unit *caster = GetCaster();
+                    if(!caster)
+                        return;
+
+                    caster->CastSpell(m_target, 55095, true);
+                }
+                break;
+            }
         }
     }
     // AT REMOVE
@@ -4162,7 +4175,7 @@ void Aura::HandleModStealth(bool apply, bool Real)
     if (apply)
     {
         // drop flag at stealth in bg
-         m_target->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_IMMUNE_OR_LOST_SELECTION);
+        m_target->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_IMMUNE_OR_LOST_SELECTION);
 
         // only at real aura add
         if (Real)
@@ -4246,7 +4259,7 @@ void Aura::HandleInvisibility(bool apply, bool Real)
     {
         m_target->m_invisibilityMask |= (1 << m_modifier.m_miscvalue);
 
-         m_target->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_IMMUNE_OR_LOST_SELECTION);
+        m_target->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_IMMUNE_OR_LOST_SELECTION);
 
         if(Real && m_target->GetTypeId()==TYPEID_PLAYER)
         {
@@ -5215,7 +5228,7 @@ void Aura::HandlePeriodicDamagePCT(bool apply, bool /*Real*/)
 void Aura::HandlePeriodicLeech(bool apply, bool /*Real*/)
 {
     m_isPeriodic = apply;
-    
+
     // For prevent double apply bonuses
     bool loading = (m_target->GetTypeId() == TYPEID_PLAYER && ((Player*)m_target)->GetSession()->PlayerLoading());
 
@@ -5271,11 +5284,21 @@ void Aura::HandleAuraModResistanceExclusive(bool apply, bool /*Real*/)
 {
     for(int8 x = SPELL_SCHOOL_NORMAL; x < MAX_SPELL_SCHOOL;x++)
     {
+        int32 oldMaxValue = 0;
         if(m_modifier.m_miscvalue & int32(1<<x))
         {
-            m_target->HandleStatModifier(UnitMods(UNIT_MOD_RESISTANCE_START + x), BASE_VALUE, float(m_modifier.m_amount), apply);
+            // no same resistance auras stack together
+            Unit::AuraList const& REAuras = m_target->GetAurasByType(SPELL_AURA_MOD_RESISTANCE_EXCLUSIVE);
+            for (Unit::AuraList::const_iterator i = REAuras.begin(); i != REAuras.end(); ++i)
+                if (((*i)->GetMiscValue() & int32(1<<x))  && (*i)->GetSpellProto()->Id != GetSpellProto()->Id)
+                    if (oldMaxValue < (*i)->GetModifier()->m_amount)
+                        oldMaxValue = (*i)->GetModifier()->m_amount;
+
+            float value = (m_modifier.m_amount > oldMaxValue) ? m_modifier.m_amount - oldMaxValue : 0.0f;
+
+            m_target->HandleStatModifier(UnitMods(UNIT_MOD_RESISTANCE_START + x), BASE_VALUE, value, apply);
             if(m_target->GetTypeId() == TYPEID_PLAYER)
-                m_target->ApplyResistanceBuffModsMod(SpellSchools(x), m_positive, float(m_modifier.m_amount), apply);
+                m_target->ApplyResistanceBuffModsMod(SpellSchools(x), m_positive, value, apply);
         }
     }
 }
@@ -6010,7 +6033,7 @@ void Aura::HandleModDamageDone(bool apply, bool Real)
 
 void Aura::HandleModDamagePercentDone(bool apply, bool Real)
 {
-    sLog.outDebug("AURA MOD DAMAGE type:%u negative:%u", m_modifier.m_miscvalue, m_positive ? 0 : 1);
+    DEBUG_LOG("AURA MOD DAMAGE type:%u negative:%u", m_modifier.m_miscvalue, m_positive ? 0 : 1);
 
     // apply item specific bonuses for already equipped weapon
     if(Real && m_target->GetTypeId() == TYPEID_PLAYER)
@@ -6073,7 +6096,7 @@ void Aura::HandleModOffhandDamagePercent(bool apply, bool Real)
     if(!Real)
         return;
 
-    sLog.outDebug("AURA MOD OFFHAND DAMAGE");
+    DEBUG_LOG("AURA MOD OFFHAND DAMAGE");
 
     m_target->HandleStatModifier(UNIT_MOD_DAMAGE_OFFHAND, TOTAL_PCT, float(m_modifier.m_amount), apply);
 }
@@ -6417,6 +6440,7 @@ void Aura::HandleSpellSpecificBoosts(bool apply)
                 }
                 else
                     return;
+                break;
             }
 
             switch(GetId())
@@ -7189,7 +7213,7 @@ void Aura::HandleSchoolAbsorb(bool apply, bool Real)
                         //Borrowed Time
                         Unit::AuraList const& borrowedTime = caster->GetAurasByType(SPELL_AURA_DUMMY);
                         for(Unit::AuraList::const_iterator itr = borrowedTime.begin(); itr != borrowedTime.end(); ++itr)
-					    {
+                        {
                             SpellEntry const* i_spell = (*itr)->GetSpellProto();
                             if(i_spell->SpellFamilyName==SPELLFAMILY_PRIEST && i_spell->SpellIconID == 2899 && i_spell->EffectMiscValue[(*itr)->GetEffIndex()] == 24)
                             {
@@ -7373,7 +7397,7 @@ void Aura::PeriodicTick()
             else
                 pdamage = uint32(m_target->GetMaxHealth()*amount/100);
 
-            
+
             // SpellDamageBonus for magic spells
             if(GetSpellProto()->DmgClass == SPELL_DAMAGE_CLASS_NONE || GetSpellProto()->DmgClass == SPELL_DAMAGE_CLASS_MAGIC)
                 pdamage = m_target->SpellDamageBonusTaken(pCaster, GetSpellProto(), pdamage, DOT, GetStackAmount());
@@ -7424,7 +7448,7 @@ void Aura::PeriodicTick()
 
             m_target->CalculateAbsorbAndResist(pCaster, GetSpellSchoolMask(GetSpellProto()), DOT, pdamage, &absorb, &resist, !(GetSpellProto()->AttributesEx2 & SPELL_ATTR_EX2_CANT_REFLECTED));
 
-            sLog.outDetail("PeriodicTick: %u (TypeId: %u) attacked %u (TypeId: %u) for %u dmg inflicted by %u abs is %u",
+            DETAIL_FILTER_LOG(LOG_FILTER_PERIODIC_AFFECTS, "PeriodicTick: %u (TypeId: %u) attacked %u (TypeId: %u) for %u dmg inflicted by %u abs is %u",
                 GUID_LOPART(GetCasterGUID()), GuidHigh2TypeId(GUID_HIPART(GetCasterGUID())), m_target->GetGUIDLow(), m_target->GetTypeId(), pdamage, GetId(),absorb);
 
             pCaster->DealDamageMods(m_target, pdamage, &absorb);
@@ -7503,7 +7527,7 @@ void Aura::PeriodicTick()
             if(m_target->GetHealth() < pdamage)
                 pdamage = uint32(m_target->GetHealth());
 
-            sLog.outDetail("PeriodicTick: %u (TypeId: %u) health leech of %u (TypeId: %u) for %u dmg inflicted by %u abs is %u",
+            DETAIL_FILTER_LOG(LOG_FILTER_PERIODIC_AFFECTS, "PeriodicTick: %u (TypeId: %u) health leech of %u (TypeId: %u) for %u dmg inflicted by %u abs is %u",
                 GUID_LOPART(GetCasterGUID()), GuidHigh2TypeId(GUID_HIPART(GetCasterGUID())), m_target->GetGUIDLow(), m_target->GetTypeId(), pdamage, GetId(),absorb);
 
             pCaster->SendSpellNonMeleeDamageLog(m_target, GetId(), pdamage, GetSpellSchoolMask(GetSpellProto()), absorb, resist, false, 0, isCrit);
@@ -7582,7 +7606,7 @@ void Aura::PeriodicTick()
             // This method can modify pdamage
             bool isCrit = IsCritFromAbilityAura(pCaster, pdamage);
 
-            sLog.outDetail("PeriodicTick: %u (TypeId: %u) heal of %u (TypeId: %u) for %u health inflicted by %u",
+            DETAIL_FILTER_LOG(LOG_FILTER_PERIODIC_AFFECTS, "PeriodicTick: %u (TypeId: %u) heal of %u (TypeId: %u) for %u health inflicted by %u",
                 GUID_LOPART(GetCasterGUID()), GuidHigh2TypeId(GUID_HIPART(GetCasterGUID())), m_target->GetGUIDLow(), m_target->GetTypeId(), pdamage, GetId());
 
             // calculate heal absorb and reduce healing
@@ -7682,7 +7706,7 @@ void Aura::PeriodicTick()
                     pdamage = maxmana;
             }
 
-            sLog.outDetail("PeriodicTick: %u (TypeId: %u) power leech of %u (TypeId: %u) for %u dmg inflicted by %u",
+            DETAIL_FILTER_LOG(LOG_FILTER_PERIODIC_AFFECTS, "PeriodicTick: %u (TypeId: %u) power leech of %u (TypeId: %u) for %u dmg inflicted by %u",
                 GUID_LOPART(GetCasterGUID()), GuidHigh2TypeId(GUID_HIPART(GetCasterGUID())), m_target->GetGUIDLow(), m_target->GetTypeId(), pdamage, GetId());
 
             int32 drain_amount = m_target->GetPower(power) > pdamage ? pdamage : m_target->GetPower(power);
@@ -7724,7 +7748,7 @@ void Aura::PeriodicTick()
             // ignore non positive values (can be result apply spellmods to aura damage
             uint32 pdamage = m_modifier.m_amount > 0 ? m_modifier.m_amount : 0;
 
-            sLog.outDetail("PeriodicTick: %u (TypeId: %u) energize %u (TypeId: %u) for %u dmg inflicted by %u",
+            DETAIL_FILTER_LOG(LOG_FILTER_PERIODIC_AFFECTS, "PeriodicTick: %u (TypeId: %u) energize %u (TypeId: %u) for %u dmg inflicted by %u",
                 GUID_LOPART(GetCasterGUID()), GuidHigh2TypeId(GUID_HIPART(GetCasterGUID())), m_target->GetGUIDLow(), m_target->GetTypeId(), pdamage, GetId());
 
             if(m_modifier.m_miscvalue < 0 || m_modifier.m_miscvalue >= MAX_POWERS)
@@ -7755,7 +7779,7 @@ void Aura::PeriodicTick()
 
             uint32 pdamage = uint32(m_target->GetMaxPower(POWER_MANA) * amount / 100);
 
-            sLog.outDetail("PeriodicTick: %u (TypeId: %u) energize %u (TypeId: %u) for %u mana inflicted by %u",
+            DETAIL_FILTER_LOG(LOG_FILTER_PERIODIC_AFFECTS, "PeriodicTick: %u (TypeId: %u) energize %u (TypeId: %u) for %u mana inflicted by %u",
                 GUID_LOPART(GetCasterGUID()), GuidHigh2TypeId(GUID_HIPART(GetCasterGUID())), m_target->GetGUIDLow(), m_target->GetTypeId(), pdamage, GetId());
 
             if(m_target->GetMaxPower(POWER_MANA) == 0)
@@ -8676,19 +8700,19 @@ void Aura::HandleAuraModAllCritChance(bool apply, bool Real)
 void Aura::HandleAllowOnlyAbility(bool apply, bool Real)
 {
     if(!Real)
-       return;
+        return;
 
     if(apply)
     {
-       m_target->setAttackTimer(BASE_ATTACK,m_duration);
-       m_target->setAttackTimer(RANGED_ATTACK,m_duration);
-       m_target->setAttackTimer(OFF_ATTACK,m_duration);
+        m_target->setAttackTimer(BASE_ATTACK,m_duration);
+        m_target->setAttackTimer(RANGED_ATTACK,m_duration);
+        m_target->setAttackTimer(OFF_ATTACK,m_duration);
     }
     else
     {
-       m_target->resetAttackTimer(BASE_ATTACK);
-       m_target->resetAttackTimer(RANGED_ATTACK);
-       m_target->resetAttackTimer(OFF_ATTACK);
+        m_target->resetAttackTimer(BASE_ATTACK);
+        m_target->resetAttackTimer(RANGED_ATTACK);
+        m_target->resetAttackTimer(OFF_ATTACK);
     }
 
     m_target->UpdateDamagePhysical(BASE_ATTACK);
