@@ -62,6 +62,7 @@
 #include "GMTicketMgr.h"
 #include "Util.h"
 #include "Language.h"
+#include "CharacterDatabaseCleaner.h"
 
 INSTANTIATE_SINGLETON_1( World );
 
@@ -545,6 +546,7 @@ void World::LoadConfigSettings(bool reload)
 
     setConfigMinMax(CONFIG_UINT32_COMPRESSION, "Compression", 1, 1, 9);
     setConfig(CONFIG_BOOL_ADDON_CHANNEL, "AddonChannel", true);
+    setConfig(CONFIG_BOOL_CLEAN_CHARACTER_DB, "CleanCharacterDB", true);
     setConfig(CONFIG_BOOL_GRID_UNLOAD, "GridUnload", true);
     setConfigPos(CONFIG_UINT32_INTERVAL_SAVE, "PlayerSave.Interval", 15 * MINUTE * IN_MILLISECONDS);
     setConfigMinMax(CONFIG_UINT32_MIN_LEVEL_STAT_SAVE, "PlayerSave.Stats.MinLevel", 0, 0, MAX_LEVEL);
@@ -1122,6 +1124,8 @@ void World::SetInitialWorldSettings()
 
     sLog.outString( "Loading Pet Name Parts..." );
     sObjectMgr.LoadPetNames();
+
+    CharacterDatabaseCleaner::CleanDatabase();
 
     sLog.outString( "Loading the max pet number..." );
     sObjectMgr.LoadPetNumber();
