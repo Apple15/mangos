@@ -1187,7 +1187,7 @@ void Unit::CastSpell(float x, float y, float z, SpellEntry const *spellInfo, boo
 uint32 Unit::SpellNonMeleeDamageLog(Unit *pVictim, uint32 spellID, uint32 damage)
 {
     SpellEntry const *spellInfo = sSpellStore.LookupEntry(spellID);
-    SpellNonMeleeDamage damageInfo(this, pVictim, spellInfo->Id, spellInfo->SchoolMask);
+    SpellNonMeleeDamage damageInfo(this, pVictim, spellInfo->Id, SpellSchoolMask(spellInfo->SchoolMask));
     CalculateSpellDamage(&damageInfo, damage, spellInfo);
     damageInfo.target->CalculateAbsorbResistBlock(this, &damageInfo, spellInfo);
     DealDamageMods(damageInfo.target,damageInfo.damage,&damageInfo.absorb);
@@ -1198,7 +1198,7 @@ uint32 Unit::SpellNonMeleeDamageLog(Unit *pVictim, uint32 spellID, uint32 damage
 
 void Unit::CalculateSpellDamage(SpellNonMeleeDamage *damageInfo, int32 damage, SpellEntry const *spellInfo, WeaponAttackType attackType)
 {
-    SpellSchoolMask damageSchoolMask = SpellSchoolMask(damageInfo->schoolMask);
+    SpellSchoolMask damageSchoolMask = damageInfo->schoolMask;
     Unit *pVictim = damageInfo->target;
 
     if (damage < 0)
@@ -1311,7 +1311,7 @@ void Unit::DealSpellDamage(SpellNonMeleeDamage *damageInfo, bool durabilityLoss)
 
     // Call default DealDamage (send critical in hit info for threat calculation)
     CleanDamage cleanDamage(0, BASE_ATTACK, damageInfo->HitInfo & SPELL_HIT_TYPE_CRIT ? MELEE_HIT_CRIT : MELEE_HIT_NORMAL);
-    DealDamage(pVictim, damageInfo->damage, &cleanDamage, SPELL_DIRECT_DAMAGE, SpellSchoolMask(damageInfo->schoolMask), spellProto, durabilityLoss);
+    DealDamage(pVictim, damageInfo->damage, &cleanDamage, SPELL_DIRECT_DAMAGE, damageInfo->schoolMask, spellProto, durabilityLoss);
 }
 
 //TODO for melee need create structure as in
@@ -7392,6 +7392,62 @@ bool Unit::HandleDummyAuraProc(Unit *pVictim, uint32 damage, Aura* triggeredByAu
                 triggered_spell_id = 50526;
                 break;
             }
+            // Blood of the North and Reaping
+            if (dummySpell->SpellIconID == 3041 || dummySpell->SpellIconID == 22)
+            {
+                if(GetTypeId()!=TYPEID_PLAYER)
+                    return false;
+                
+                Player *player = (Player*)this;
+                for (uint32 i = 0; i < MAX_RUNES; ++i)
+                {
+                    if (player->GetCurrentRune(i) == RUNE_BLOOD)
+                    {
+                        if(!player->GetRuneCooldown(i))
+                            player->ConvertRune(i, RUNE_DEATH, dummySpell->Id);
+                        else
+                        {
+                            // search for another rune that might be available
+                            for (uint32 iter = i; iter < MAX_RUNES; ++iter)
+                            {
+                                if(player->GetCurrentRune(iter) == RUNE_BLOOD && !player->GetRuneCooldown(iter))
+                                {
+                                    player->ConvertRune(iter, RUNE_DEATH, dummySpell->Id);
+                                    triggeredByAura->SetAuraPeriodicTimer(0);
+                                    return true;
+                                }
+                            }
+                            player->SetNeedConvertRune(i, true, dummySpell->Id);
+                        }
+                        triggeredByAura->SetAuraPeriodicTimer(0);
+                        return true;
+                    }
+                }
+                return false;
+            }
+            // Death Rune Mastery
+            if (dummySpell->SpellIconID == 2622)
+            {
+                if(GetTypeId()!=TYPEID_PLAYER)
+                    return false;
+                
+                Player *player = (Player*)this;
+                for (uint32 i = 0; i < MAX_RUNES; ++i)
+                {
+                    RuneType currRune = player->GetCurrentRune(i);
+                    if (currRune == RUNE_UNHOLY || currRune == RUNE_FROST)
+                    {
+                        uint16 cd = player->GetRuneCooldown(i);
+                        if(!cd)
+                            player->ConvertRune(i, RUNE_DEATH, dummySpell->Id);
+                        else // there is a cd
+                            player->SetNeedConvertRune(i, true, dummySpell->Id);
+                        // no break because it converts all
+                    }
+                }
+                triggeredByAura->SetAuraPeriodicTimer(0);
+                return true;
+            }
             // Blood-Caked Blade
             if (dummySpell->SpellIconID == 138)
             {
@@ -12910,7 +12966,7 @@ void Unit::ProcDamageAndSpellFor( bool isVictim, Unit * pTarget, uint32 procFlag
             case SPELL_AURA_PROC_TRIGGER_DAMAGE:
             {
                 DEBUG_FILTER_LOG(LOG_FILTER_SPELL_CAST, "ProcDamageAndSpell: doing %u damage from spell id %u (triggered by %s aura of spell %u)", auraModifier->m_amount, spellInfo->Id, (isVictim?"a victim's":"an attacker's"), triggeredByAura->GetId());
-                SpellNonMeleeDamage damageInfo(this, pTarget, spellInfo->Id, spellInfo->SchoolMask);
+                SpellNonMeleeDamage damageInfo(this, pTarget, spellInfo->Id, SpellSchoolMask(spellInfo->SchoolMask));
                 CalculateSpellDamage(&damageInfo, auraModifier->m_amount, spellInfo);
                 damageInfo.target->CalculateAbsorbResistBlock(this, &damageInfo, spellInfo);
                 DealDamageMods(damageInfo.target,damageInfo.damage,&damageInfo.absorb);
@@ -12923,6 +12979,7 @@ void Unit::ProcDamageAndSpellFor( bool isVictim, Unit * pTarget, uint32 procFlag
             case SPELL_AURA_OBS_MOD_MANA:
             case SPELL_AURA_MOD_STUN:
             case SPELL_AURA_ADD_PCT_MODIFIER:
+            case SPELL_AURA_PERIODIC_DUMMY:
             case SPELL_AURA_DUMMY:
             {
                 DEBUG_FILTER_LOG(LOG_FILTER_SPELL_CAST, "ProcDamageAndSpell: casting spell id %u (triggered by %s dummy aura of spell %u)", spellInfo->Id,(isVictim?"a victim's":"an attacker's"), triggeredByAura->GetId());
