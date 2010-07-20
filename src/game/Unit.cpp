@@ -685,6 +685,13 @@ uint32 Unit::DealDamage(Unit *pVictim, uint32 damage, CleanDamage const* cleanDa
         {
             player_tap->ProcDamageAndSpell(pVictim, PROC_FLAG_KILL, PROC_FLAG_KILLED, PROC_EX_NONE, 0);
 
+			///PVP Announcer
+			if (pVictim->GetTypeId() == TYPEID_PLAYER)
+			{
+				sWorld.SendPvPAnnounce(player_tap, ((Player*)pVictim));
+				sLog.outError("%s Has Killed %s",player_tap->GetName(),((Player*)pVictim)->GetName());
+			}
+
             WorldPacket data(SMSG_PARTYKILLLOG, (8+8));     //send event PARTY_KILL
             data << player_tap->GetObjectGuid();            //player with killing blow
             data << pVictim->GetObjectGuid();              //victim
